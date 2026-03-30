@@ -11,7 +11,7 @@ from scipy.stats import gaussian_kde
 
 
 
-def draw_optical_flow_field(img, u, v, step=16, scale=1, color=(255, 0, 0)):
+def draw_optical_flow_field(img, u, v, step=16, scale=50, color=(255, 0, 0)):
     """
     在图像上绘制光流场箭头图（类似论文图8的效果）
     :param img: 输入图像（通常是缩放后的帧）
@@ -26,6 +26,10 @@ def draw_optical_flow_field(img, u, v, step=16, scale=1, color=(255, 0, 0)):
     flow_img = img.copy()
     h, w = img.shape[:2]
 
+    #修复，过滤无效光流，只保留有运动的部分
+    # u = np.nan_to_num(u, 0)
+    # v = np.nan_to_num(v, 0)
+
     # 遍历网格点
     for y in range(0, h, step):
         for x in range(0, w, step):
@@ -36,6 +40,10 @@ def draw_optical_flow_field(img, u, v, step=16, scale=1, color=(255, 0, 0)):
             # 计算箭头终点（简化版向量叠加）
             x2 = int(x + flow_u)
             y2 = int(y + flow_v)
+
+            # 跳过极小光流，避免无效绘制
+            # if abs(flow_u) < 1 and abs(flow_v) < 1:
+            #     continue
 
             # 绘制箭头
             # 1. 绘制箭头主体线
@@ -127,6 +135,9 @@ def rgb_to_generalized_mass(img_bgr):
     hue_dist = np.minimum(np.abs(Hc - H), 1.0 - np.abs(Hc - H))
     f_hue = 1.0 - 1.0 / (1.0 + np.exp(-a * (hue_dist - b)))
     mass = f_hue * S * V
+
+    mass = np.clip(mass, 1e-6, 1.0)
+
     return mass.astype(np.float32)
 
 
@@ -149,7 +160,7 @@ def compute_nsd_optical_flow(I1, I2, alpha=0.1):
     return u_nsd, v_nsd
 
 
-def compute_omt_optical_flow(I0, I1, alpha=0.1):
+def compute_omt_optical_flow(I0, I1, alpha=20):
     """
     论文Section II-B: 计算Optimal Mass Transport (OMT)光流
     输入: I0, I1 - 连续两帧的广义质量图 (float32)
@@ -196,6 +207,8 @@ def compute_omt_optical_flow(I0, I1, alpha=0.1):
     D_y = build_derivative_matrix(h, w, direction='y')
 
     I_avg = (I0.flatten() + I1.flatten()) / 2.0
+
+    I_avg = np.clip(I_avg, 1e-6, 1.0)
     I_hat = scipy.sparse.diags(I_avg, 0, shape=(N, N))
 
     D_x_I = D_x @ I_hat
@@ -209,9 +222,17 @@ def compute_omt_optical_flow(I0, I1, alpha=0.1):
     left_side = alpha * I_hat_block + A.T @ A
     right_side = A.T @ b
 
-    u_vec = scipy.sparse.linalg.spsolve(left_side, right_side)
+    try:
+        u_vec = scipy.sparse.linalg.spsolve(left_side, right_side)
+    except:
+        u_vec = np.zeros(2 * N, dtype=np.float32)
+
     u_omt = u_vec[:N].reshape(h, w)
     v_omt = u_vec[N:].reshape(h, w)
+
+    # 🔥 修复：过滤NaN/inf
+    u_omt = np.nan_to_num(u_omt, nan=0.0, posinf=0.0, neginf=0.0)
+    v_omt = np.nan_to_num(v_omt, nan=0.0, posinf=0.0, neginf=0.0)
 
     return u_omt.astype(np.float32), v_omt.astype(np.float32)
 
@@ -236,6 +257,9 @@ def compute_source_match(u_omt, v_omt):
     输入: u_omt, v_omt - OMT光流分量
     输出: f3 - 源匹配特征值
     """
+    if np.max(np.abs(u_omt)) < 1e-8 and np.max(np.abs(v_omt)) < 1e-8:
+        return 0.0
+
     h, w = u_omt.shape
     y, x = np.mgrid[0:h, 0:w]
     yc, xc = h // 2, w // 2
@@ -254,8 +278,10 @@ def compute_source_match(u_omt, v_omt):
 
     conv_u = scipy.ndimage.convolve(u_norm, u_T, mode='constant')
     conv_v = scipy.ndimage.convolve(v_norm, v_T, mode='constant')
-    f3 = np.max(np.abs(conv_u + conv_v))
-    return f3
+
+    res = np.max(np.abs(conv_u + conv_v))
+
+    return np.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def compute_directional_variance(u_nsd, v_nsd, essential_mask, n_bins=8):
@@ -288,7 +314,8 @@ def compute_directional_variance(u_nsd, v_nsd, essential_mask, n_bins=8):
     return f4
 
 
-def extract_karasev_features(frame1_bgr, frame2_bgr, alpha_nsd=0.1, alpha_omt=0.1, c_essential=0.2, resize_max=640):
+def extract_karasev_features(frame1_bgr, frame2_bgr, alpha_nsd=0.1, alpha_omt=20, c_essential=0.2, resize_max=640,
+                             frame_index = None, draw_kde=False):
     """
     基于Mueller et al. (2013)论文提取完整的4D火灾特征向量
     新增resize_max参数：限制最大边长，大幅提升大分辨率视频的处理速度
@@ -316,8 +343,8 @@ def extract_karasev_features(frame1_bgr, frame2_bgr, alpha_nsd=0.1, alpha_omt=0.
         img=frame1_bgr,  # 用原始帧绘图
         u=u_nsd,
         v=v_nsd,
-        step=16,  # 原始分辨率用16，疏密合适、不卡顿
-        scale=5,  # 箭头放大倍数
+        step=4,  # 原始分辨率用16，疏密合适、不卡顿
+        scale=100,  # 箭头放大倍数
         color=(255, 0, 0)  # 蓝色箭头（论文风格）
     )
     # 显示光流图
@@ -345,14 +372,15 @@ def extract_karasev_features(frame1_bgr, frame2_bgr, alpha_nsd=0.1, alpha_omt=0.
     # 🟢 【插入绘图代码：位置100%正确】
     # 自动根据f4判断：f4>0.1为火焰，否则为刚体（可根据你的数据调整阈值）
     # ======================================
-    title_suffix = "Fire" if f4 > 0.1 else "Rigid"
-    plot_flow_kde_histogram(
-        u_nsd=u_nsd,
-        v_nsd=v_nsd,
-        essential_mask=essential_mask,
-        title_suffix=title_suffix,
-        frame_idx=frame_idx  # 按帧号保存，避免覆盖
-    )
+    if draw_kde:
+        title_suffix = "Fire" if f4 > 0.1 else "Rigid"
+        plot_flow_kde_histogram(
+            u_nsd=u_nsd,
+            v_nsd=v_nsd,
+            essential_mask=essential_mask,
+            title_suffix=title_suffix, # 按帧号保存，避免覆盖
+            frame_idx=frame_index
+        )
 
     return np.array([f1, f2, f3, f4])
 
@@ -406,7 +434,9 @@ def process_video_fire_features(
                 # 提取4D特征
                 features = extract_karasev_features(
                     prev_frame, curr_frame,
-                    resize_max=resize_max
+                    resize_max=resize_max,
+                    frame_index=frame_idx,
+                    draw_kde=False
                 )
                 f1, f2, f3, f4 = features
 
@@ -471,7 +501,7 @@ if __name__ == "__main__":
     # 只需修改这里的视频路径即可运行
     # 支持.mp4/.avi格式，相对路径/绝对路径均可
     # --------------------------
-    INPUT_VIDEO_PATH = "car.mp4"  # 替换为你的视频路径
+    INPUT_VIDEO_PATH = "part_mp4\car.mp4"  # 替换为你的视频路径
     # INPUT_VIDEO_PATH = "petrochemical_flame.avi"
 
     # 处理视频
