@@ -16,16 +16,12 @@ W_SE = 0.8572
 W_VE = 0.9842
 SE_LOW = 0.62
 SE_HIGH = 0.88
-
-#核心修改部分
-R_T = 110
-S_T = 45
-
-
+R_T = 125
+S_T = 55
 # 【优化】放宽跟踪距离阈值，减少ID刷新
 TRACKING_DIST_THRESH = 120
-# 【优化1】调高最小面积阈值，过滤微小噪点（可根据视频调整）
-MIN_AREA_THRESH = 20
+# 【优化】降低最小面积阈值，适配小火焰
+MIN_AREA_THRESH = 15
 # 绘图最小帧数要求
 MIN_PLOT_FRAME = 3
 
@@ -41,7 +37,6 @@ def rgb2his(rgb_frame):
     return R * 255, G * 255, B * 255, S
 
 
-# 【核心优化2】重构候选区提取的形态学流程，解决连通性+噪点问题
 def get_flame_candidate_paper(frame):
     R, G, B, S = rgb2his(frame)
     rule1 = R > R_T
@@ -49,28 +44,16 @@ def get_flame_candidate_paper(frame):
     rule3 = S >= ((255 - R) * S_T) / R_T
     mask = np.zeros_like(R, dtype=np.uint8)
     mask[rule1 & rule2 & rule3] = 255
-
-    # -------------------------- 优化形态学处理 --------------------------
-    # 1. 小核开运算：彻底去除微小噪点（解决小干扰像素问题）
-    kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_small, iterations=1)
-
-    # 2. 稍大核闭运算：填充火焰内部空洞、连接相邻火焰区域（解决连通性问题）
-    kernel_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_large, iterations=2)
-
-    # 3. 最终小开运算：清除闭运算后残留的微小噪点
-    kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_small, iterations=1)
-    # -------------------------------------------------------------------
-
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     return mask
 
 
 # ====================== 2. 蓝色分量离散度过滤函数 ======================
 def get_blue_dispersion_filtered_mask(frame, candidate_mask):
     filtered_mask = np.zeros_like(candidate_mask)
-    contours, _ = cv2.findContours(candidate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    contours, _ = cv2.findContours(candidate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     B, _, _ = cv2.split(frame)
 
     for cnt in contours:
@@ -117,13 +100,13 @@ def calculate_frame_diff(prev_gray, curr_gray):
     if prev_gray is None:
         return None
     diff = cv2.absdiff(prev_gray, curr_gray)
-    _, diff_mask = cv2.threshold(diff, 20, 255, cv2.THRESH_BINARY)
+    _, diff_mask = cv2.threshold(diff, 20, 255, cv2.THRESH_BINARY)  # 【优化】降低差分阈值，更容易检测到运动
     return diff_mask
 
 
 def check_region_motion(diff_mask, cnt):
     if not ENABLE_MOTION_FILTER or diff_mask is None:
-        return True
+        return True  # 关闭过滤时，直接返回True
     region_mask = np.zeros_like(diff_mask)
     cv2.drawContours(region_mask, [cnt], -1, 255, -1)
     motion_pixels = cv2.countNonZero(cv2.bitwise_and(diff_mask, region_mask))
@@ -356,7 +339,7 @@ def flame_detection(video_path):
     full_trajectories = {}
     similarity_records = {}
 
-    # 逐帧调试：先读取第一帧
+    # 【逐帧调试】先读取第一帧
     ret, frame = cap.read()
     if not ret:
         print("无法读取视频")
@@ -442,7 +425,7 @@ def flame_detection(video_path):
             cv2.putText(display_frame, ve_status, (cx - 40, cy + 35),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
-        # 逐帧调试提示信息
+        # 【逐帧调试】在画面上显示提示信息
         cv2.putText(display_frame, f"Frame: {frame_count} | SPACE: Next | Q: Quit | S: Save", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
@@ -461,31 +444,32 @@ def flame_detection(video_path):
         cv2.imshow("Real-time Flame Detection", display_frame)
         cv2.imshow("Paper Figure (a)(b)(c)", paper_canvas)
 
-        # 逐帧按键控制
+        # 【逐帧调试】按键控制：waitKey(0)无限等待
         key = cv2.waitKey(0) & 0xFF
         if key == ord('q'):
+            # 按q键退出
             break
         elif key == ord(' '):
-            # 空格键前进一帧
+            # 按空格键读取下一帧
             ret, frame = cap.read()
             if not ret:
                 print("视频播放完毕")
                 break
         elif key == ord('s'):
-            # s键保存当前论文图
+            # 按s键保存当前论文图片
             save_path = f"paper_figure_{save_count}_frame_{frame_count}.png"
             cv2.imwrite(save_path, paper_canvas)
             print(f"论文图片已保存为 {save_path}")
             save_count += 1
 
-    # 检测结束后数据统计
+    # 检测结束后，打印最终数据统计
     print("\n" + "=" * 60)
     print(f"视频总帧数:{frame_count} | 总跟踪目标数:{len(full_trajectories)}")
     for tid, traj in full_trajectories.items():
         print(f"目标ID{tid} | 总帧数:{len(traj)} | 相似度记录数:{len(similarity_records[tid])}")
     print("=" * 60 + "\n")
 
-    # 绘图
+    # 绘图：放宽最小帧数要求
     np_trajectories = {tid: np.array(traj) for tid, traj in full_trajectories.items() if len(traj) >= MIN_PLOT_FRAME}
     plot_centroid_trajectories(np_trajectories)
 
