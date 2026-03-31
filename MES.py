@@ -20,7 +20,7 @@ SE_HIGH = 0.88
 
 # 核心修改部分
 R_T = 110
-S_T = 70
+S_T = 90
 
 # 【优化】放宽跟踪距离阈值，减少ID刷新
 TRACKING_DIST_THRESH = 120
@@ -64,7 +64,7 @@ def get_flame_candidate_paper(frame):
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_small, iterations=1)
 
     # 2. 稍大核闭运算：填充火焰内部空洞、连接相邻火焰区域（解决连通性问题）
-    kernel_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+    kernel_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_large, iterations=2)
 
     # 3. 最终小开运算：清除闭运算后残留的微小噪点
@@ -376,7 +376,7 @@ def flame_detection(video_path):
     similarity_records = {}
 
     # ====================== 【新增】CSV初始化 ======================
-    csv_file = open("car.csv", "w", newline="", encoding="utf-8")
+    csv_file = open("truck.csv", "w", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow([
         "Frame", "Target_ID", "CX", "CY", "Area", "IoU_Similarity",
@@ -536,4 +536,4 @@ def flame_detection(video_path):
 
 if __name__ == "__main__":
     # 替换为你的测试视频路径
-    flame_detection("part_mp4\car.mp4")
+    flame_detection("part_mp4\car2.mp4")
