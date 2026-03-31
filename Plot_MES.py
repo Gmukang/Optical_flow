@@ -110,7 +110,7 @@ def plot_single_target_similarity(target_id, df):
 
 if __name__ == "__main__":
     # 1. 读取CSV文件
-    csv_path = "flame_data.csv"
+    csv_path = "car.csv"
     try:
         df = pd.read_csv(csv_path)
         print(f"✅ 成功读取 {csv_path}")

@@ -20,7 +20,7 @@ SE_HIGH = 0.88
 
 # 核心修改部分
 R_T = 110
-S_T = 45
+S_T = 70
 
 # 【优化】放宽跟踪距离阈值，减少ID刷新
 TRACKING_DIST_THRESH = 120
@@ -31,6 +31,8 @@ MIN_PLOT_FRAME = 3
 
 # 【新增】匹配机制优化参数：面积变化率阈值（±60%以内才允许匹配）
 MAX_AREA_CHANGE_RATIO = 0.6
+#
+WHITE_THRESHOLD = 254  # 论文中白色核心的RGB阈值，保持不变
 
 
 # ====================== 1. RGB-HIS转换 + 论文火焰候选区三规则 ======================
@@ -50,8 +52,11 @@ def get_flame_candidate_paper(frame):
     rule1 = R > R_T
     rule2 = (R >= G) & (G > B)
     rule3 = S >= ((255 - R) * S_T) / R_T
+    paper_rules = rule1 & rule2 & rule3
+
+    white_core = (R > WHITE_THRESHOLD) & (G > WHITE_THRESHOLD) & (B > WHITE_THRESHOLD)
     mask = np.zeros_like(R, dtype=np.uint8)
-    mask[rule1 & rule2 & rule3] = 255
+    mask[paper_rules | white_core] = 255
 
     # -------------------------- 优化形态学处理 --------------------------
     # 1. 小核开运算：彻底去除微小噪点（解决小干扰像素问题）
@@ -59,7 +64,7 @@ def get_flame_candidate_paper(frame):
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_small, iterations=1)
 
     # 2. 稍大核闭运算：填充火焰内部空洞、连接相邻火焰区域（解决连通性问题）
-    kernel_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    kernel_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_large, iterations=2)
 
     # 3. 最终小开运算：清除闭运算后残留的微小噪点
@@ -371,7 +376,7 @@ def flame_detection(video_path):
     similarity_records = {}
 
     # ====================== 【新增】CSV初始化 ======================
-    csv_file = open("flame_data.csv", "w", newline="", encoding="utf-8")
+    csv_file = open("car.csv", "w", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow([
         "Frame", "Target_ID", "CX", "CY", "Area", "IoU_Similarity",
