@@ -17,10 +17,9 @@ W_VE = 0.9842
 SE_LOW = 0.62
 SE_HIGH = 0.88
 
-#核心修改部分
+# 核心修改部分
 R_T = 110
 S_T = 45
-
 
 # 【优化】放宽跟踪距离阈值，减少ID刷新
 TRACKING_DIST_THRESH = 120
@@ -28,6 +27,9 @@ TRACKING_DIST_THRESH = 120
 MIN_AREA_THRESH = 20
 # 绘图最小帧数要求
 MIN_PLOT_FRAME = 3
+
+# 【新增】匹配机制优化参数：面积变化率阈值（±60%以内才允许匹配）
+MAX_AREA_CHANGE_RATIO = 0.6
 
 
 # ====================== 1. RGB-HIS转换 + 论文火焰候选区三规则 ======================
@@ -132,7 +134,8 @@ def check_region_motion(diff_mask, cnt):
 
 # ====================== 5. 工具函数：提取所有目标轮廓+质心+面积 ======================
 def get_all_contours_centroid_area(mask):
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 【修改】CHAIN_APPROX_NONE：保留所有轮廓点，让轮廓完全贴合边缘
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     targets = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
@@ -147,21 +150,31 @@ def get_all_contours_centroid_area(mask):
     return targets
 
 
-# ====================== 6. 论文区域跟踪算法：质心最小距离匹配同一目标 ======================
+# ====================== 【核心修改】6. 论文区域跟踪算法：质心距离+面积变化双重约束 ======================
 def match_targets(prev_targets, curr_targets):
     matched = []
     used_prev = set()
 
-    for curr_idx, (_, curr_c, _) in enumerate(curr_targets):
+    for curr_idx, (_, curr_c, curr_area) in enumerate(curr_targets):
         min_dist = float('inf')
         match_idx = -1
 
         for prev_idx, hist in enumerate(prev_targets):
             if prev_idx in used_prev:
                 continue
+
+            # 1. 计算质心距离
             prev_c = hist["centroid"][-1]
             dist = np.sqrt((curr_c[0] - prev_c[0]) ** 2 + (curr_c[1] - prev_c[1]) ** 2)
-            if dist < min_dist and dist < TRACKING_DIST_THRESH:
+
+            # 2. 【新增】计算面积变化率
+            prev_area = hist["area"][-1] if len(hist["area"]) > 0 else curr_area
+            area_change_ratio = abs(curr_area - prev_area) / (prev_area + 1e-6)  # 加小值防除零
+
+            # 3. 双重约束：质心距离足够近 + 面积变化率在合理范围内
+            if (dist < min_dist
+                    and dist < TRACKING_DIST_THRESH
+                    and area_change_ratio < MAX_AREA_CHANGE_RATIO):
                 min_dist = dist
                 match_idx = prev_idx
 
