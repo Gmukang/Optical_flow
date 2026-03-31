@@ -3,6 +3,7 @@ import numpy as np
 from collections import deque
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch
+import csv  # 仅新增导入，不影响原有代码
 
 # ====================== 【调试开关 & 核心参数】======================
 # 调试开关：关闭帧差分过滤（测试时设为False，正式实验设为True）
@@ -357,7 +358,7 @@ def plot_similarity_scatter(similarity_dict):
     plt.show()
 
 
-# ====================== 主函数：逐帧调试模式 ======================
+# ====================== 主函数：逐帧调试模式 + CSV保存 ======================
 def flame_detection(video_path):
     cap = cv2.VideoCapture(video_path)
     tracked_targets = {}
@@ -368,6 +369,14 @@ def flame_detection(video_path):
     prev_gray = None
     full_trajectories = {}
     similarity_records = {}
+
+    # ====================== 【新增】CSV初始化 ======================
+    csv_file = open("flame_data.csv", "w", newline="", encoding="utf-8")
+    csv_writer = csv.writer(csv_file)
+    csv_writer.writerow([
+        "Frame", "Target_ID", "CX", "CY", "Area", "IoU_Similarity",
+        "RD", "BMS", "Final_Result"
+    ])
 
     # 逐帧调试：先读取第一帧
     ret, frame = cap.read()
@@ -446,6 +455,13 @@ def flame_detection(video_path):
                 "cy": cy
             }
 
+            # ====================== 【新增】写入CSV ======================
+            csv_writer.writerow([
+                frame_count, t_id, cx, cy, round(area, 2),
+                round(iou_value, 4) if not np.isnan(iou_value) else -1,
+                RD, BMS, 1 if final_res else 0
+            ])
+
             # 实时可视化
             color = (0, 255, 0) if final_res else (0, 0, 255)
             cv2.drawContours(display_frame, [cnt], -1, color, 2)
@@ -490,6 +506,10 @@ def flame_detection(video_path):
             cv2.imwrite(save_path, paper_canvas)
             print(f"论文图片已保存为 {save_path}")
             save_count += 1
+
+    # 关闭CSV文件
+    csv_file.close()
+    print("\n✅ 所有目标数据已保存到 flame_data.csv")
 
     # 检测结束后数据统计
     print("\n" + "=" * 60)
