@@ -92,7 +92,7 @@ def plot_single_target_similarity(target_id, df):
 
     ax.scatter(frame_nums, sim_values, marker=marker_style, color=marker_color, s=marker_size, linewidths=0.5)
 
-    ax.set_xlim(0, max(300, np.max(frame_nums)))
+    ax.set_xlim(0, 150)
     ax.set_ylim(0, 1.0)
     ax.set_yticks(np.arange(0, 1.1, 0.1))
     ax.set_xlabel("Frame Number", fontsize=10)
@@ -110,7 +110,7 @@ def plot_single_target_similarity(target_id, df):
 
 if __name__ == "__main__":
     # 1. 读取CSV文件
-    csv_path = "fire1.csv"
+    csv_path = "car_m.csv"
     try:
         df = pd.read_csv(csv_path)
         print(f"✅ 成功读取 {csv_path}")
